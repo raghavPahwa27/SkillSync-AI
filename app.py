@@ -237,18 +237,8 @@ div[data-testid="stFileUploaderDropzone"] { background:transparent !important; }
 
 # ── Imports ───────────────────────────────────────────────────────────────────
 import re
-from utils.parser          import extract_text_from_pdf
-from utils.similarity      import get_embedding, calculate_cosine_similarity
-from utils.skill_extractor import extract_skills, compare_skills, infer_implied_skills, get_jd_skill_frequencies
-from utils.resume_analyzer import analyze_resume, get_section_scores
-from utils.topic_analyzer  import get_domain_alignment
-from utils.feedback_engine import (
-    get_score_tier,
-    score_project_against_jd,
-    generate_why_score,
-    generate_action_plan,
-    SCORE_TIERS,
-)
+from utils.parser import extract_text_from_pdf
+from utils.orchestrator import run_analysis_pipeline
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -288,13 +278,18 @@ def render_score_ring(score: float, tier: dict) -> str:
     """
 
 
-def render_breakdown_row(label: str, score: float, color: str) -> str:
-    """Render a horizontal progress bar for a breakdown score."""
+def render_breakdown_row(label: str, score: float, color: str, confidence: str) -> str:
+    """Render a horizontal progress bar for a breakdown score with confidence rating."""
+    conf_color = "#34D399" if confidence == "High" else ("#FBBF24" if confidence == "Medium" else "#EF4444")
     return f"""
     <div style="margin-bottom:0.6rem; font-size:0.78rem;">
         <div style="display:flex; justify-content:space-between; margin-bottom:0.15rem; color:#94A3B8;">
             <span>{label}</span>
-            <span style="font-weight:600; color:{color};">{score:.0f}%</span>
+            <span>
+                <span style="font-weight:600; color:{color};">{score:.0f}%</span>
+                <span style="font-size:0.7rem; color:#475569; margin: 0 0.25rem;">|</span>
+                <span style="font-size:0.7rem; font-weight:600; color:{conf_color};">{confidence} Confidence</span>
+            </span>
         </div>
         <div style="height:5px; background:rgba(255,255,255,0.06); border-radius:100px; overflow:hidden;">
             <div style="height:100%; width:{min(score, 100):.1f}%; background:{color}; border-radius:100px;"></div>
@@ -537,79 +532,48 @@ if analyze_clicked and resume_file and jd_file:
         st.error("❌ Could not extract text from the Job Description PDF.")
         st.stop()
 
-    # Step 2: Deep section + project analysis
-    with st.spinner("🔬 Analysing resume sections, projects & experience..."):
-        deep_analysis  = analyze_resume(resume_text, jd_text)
-        section_scores = get_section_scores(deep_analysis["section_texts"], jd_text)
+    # Run the full pipeline orchestrator
+    with st.spinner("🧠 Running full content analysis... (first run downloads model)"):
+        res = run_analysis_pipeline(resume_text, jd_text)
 
-    # Step 3: Skill extraction + comparison
-    with st.spinner("🔍 Extracting and comparing skills..."):
-        from assets.skills_database import SOFT_SKILLS
-        soft_skills_set = {s.lower() for s in SOFT_SKILLS}
-
-        # Extract base resume skills, infer implied skills from context, and filter out soft skills
-        raw_resume_skills = extract_skills(resume_text)
-        inferred_skills   = infer_implied_skills(resume_text)
-        resume_skills     = (raw_resume_skills | inferred_skills) - soft_skills_set
-
-        # Extract JD skills and filter out soft skills
-        jd_skills         = extract_skills(jd_text) - soft_skills_set
-        skill_report      = compare_skills(resume_skills, jd_skills)
-
-    matched_skills  = skill_report["matched"]
-    missing_skills  = skill_report["missing"]
-    extra_skills    = skill_report["extra"]
-    total_jd_skills = len(jd_skills)
-
-    # Calculate JD keyword frequencies
-    jd_frequencies = get_jd_skill_frequencies(jd_text, jd_skills)
-
-    # Group missing skills into priority buckets based on JD mention frequency
-    critical_missing  = []
-    important_missing = []
-    optional_missing  = []
-    for skill in missing_skills:
-        freq = jd_frequencies.get(skill, 1)
-        if freq >= 3:
-            critical_missing.append(skill)
-        elif freq == 2:
-            important_missing.append(skill)
-        else:
-            optional_missing.append(skill)
-
-    # Step 4: Calculate Weighted Match Score & Component Breakdown
-    skills_score     = (len(matched_skills) / len(jd_skills) * 100) if jd_skills else 100.0
-    experience_score = section_scores.get("experience", 0.0)
-    projects_score   = section_scores.get("projects", 0.0)
-    education_score  = section_scores.get("education", 0.0)
-
-    raw_weighted_score = 0.4 * skills_score + 0.2 * experience_score + 0.4 * projects_score
-    # Apply +12% score boost, capped at 99.0%
-    match_score = min(raw_weighted_score + 12.0, 99.0)
-
-    # Step 5: Domain Inference Mapping
-    with st.spinner("🗺️ Mapping technical domains..."):
-        domain_alignment = get_domain_alignment(resume_skills, jd_skills)
-
-    # Step 6: Feedback generation (fast, rule-based)
-    tier         = get_score_tier(match_score)
-    why_score    = generate_why_score(
-        match_score, matched_skills, missing_skills,
-        domain_alignment, deep_analysis, jd_skills,
-    )
-    action_plan  = generate_action_plan(
-        missing_skills, domain_alignment, match_score,
-        deep_analysis["projects"], jd_skills, matched_skills,
-    )
-
-    # Score each project against JD
-    projects = deep_analysis.get("projects", [])
-    project_scores = [
-        (proj, *score_project_against_jd(proj, jd_skills))
-        for proj in projects
-    ]
-    # Sort by relevance descending
-    project_scores.sort(key=lambda x: x[1], reverse=True)
+    # Extract structured results for the UI
+    match_score          = res["match_score"]
+    raw_semantic_score   = res["raw_semantic_score"]
+    
+    # Section match scores
+    skills_score         = res["skills_score"]
+    experience_score     = res["experience_score"]
+    projects_score       = res["projects_score"]
+    education_score      = res["education_score"]
+    
+    # Confidence & ATS
+    confidence_scores    = res["confidence_scores"]
+    ats_readiness_score  = res["ats_readiness_score"]
+    ats_issues           = res["ats_issues"]
+    
+    # Skills breakdown
+    matched_skills       = res["skills"]["matched"]
+    missing_skills       = res["skills"]["missing"]
+    extra_skills         = res["skills"]["extra"]
+    critical_missing     = res["skills"]["critical_missing"]
+    important_missing    = res["skills"]["important_missing"]
+    nice_to_have_missing = res["skills"]["nice_to_have_missing"]
+    jd_frequencies       = res["skills"]["frequencies"]
+    skill_evidence       = res["skills"]["evidence"]
+    total_jd_skills      = len(matched_skills) + len(missing_skills)
+    
+    # Section details
+    sections_detected    = res["sections_detected"]
+    section_texts        = res["section_texts"]
+    section_scores       = res["section_scores"]
+    projects             = res["projects"]  # list of structured project dicts
+    experience_highlights = res["experience_highlights"]
+    
+    # Domain & feedback
+    domain_alignment     = res["domain_alignment"]
+    why_score            = res["why_score"]
+    action_plan          = res["action_plan"]
+    tier                 = res["tier"]
 
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -666,14 +630,53 @@ if analyze_clicked and resume_file and jd_file:
         # Match Breakdown
         st.markdown("<div style='margin-top: 1.2rem; margin-bottom: 1.2rem;'>", unsafe_allow_html=True)
         st.markdown("<h4 style='font-size:0.85rem;color:#C4B5FD;margin-bottom:0.6rem;text-transform:uppercase;letter-spacing:0.05em;'>📊 Match Breakdown</h4>", unsafe_allow_html=True)
-        st.markdown(render_breakdown_row("Skills Match", skills_score, "#A78BFA"), unsafe_allow_html=True)
-        st.markdown(render_breakdown_row("Projects Match", projects_score, "#34D399"), unsafe_allow_html=True)
-        st.markdown(render_breakdown_row("Experience Match", experience_score, "#60A5FA"), unsafe_allow_html=True)
-        st.markdown(render_breakdown_row("Education Match", education_score, "#FBBF24"), unsafe_allow_html=True)
+        st.markdown(render_breakdown_row("Skills Match", skills_score, "#A78BFA", confidence_scores["skills"]), unsafe_allow_html=True)
+        st.markdown(render_breakdown_row("Projects Match", projects_score, "#34D399", confidence_scores["projects"]), unsafe_allow_html=True)
+        st.markdown(render_breakdown_row("Experience Match", experience_score, "#60A5FA", confidence_scores["experience"]), unsafe_allow_html=True)
+        st.markdown(render_breakdown_row("Education Match", education_score, "#FBBF24", confidence_scores["education"]), unsafe_allow_html=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
         # Industry scale
         st.markdown(render_industry_scale(match_score), unsafe_allow_html=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # PANEL 1.5: ATS READINESS SCORE
+    # ─────────────────────────────────────────────────────────────────────────
+    st.markdown("""
+    <div style="text-align:center;margin-bottom:1.5rem;margin-top:1.5rem;">
+        <h2 style="font-size:1.4rem;font-weight:700;color:#E2E8F0;margin:0 0 0.3rem;">
+            📝 ATS Readiness Analysis
+        </h2>
+        <p style="font-size:0.83rem;color:#64748B;margin:0;">
+            How formatting, structure, and impact metrics stack up against modern Applicant Tracking Systems
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    col_ats_score, col_ats_issues = st.columns([1, 1.6], gap="large")
+    
+    with col_ats_score:
+        st.markdown(f"""
+        <div class="glass-card" style="text-align:center; padding:2rem; border-color:rgba(124,58,237,0.3);">
+            <div style="font-size:2.5rem; margin-bottom:0.5rem;">📋</div>
+            <div style="font-size:2.2rem; font-weight:800; color:#C4B5FD; line-height:1;">{ats_readiness_score}%</div>
+            <div style="font-size:0.85rem; font-weight:600; color:#E2E8F0; margin-top:0.5rem; text-transform:uppercase; letter-spacing:0.05em;">ATS Readiness Score</div>
+        </div>
+        """, unsafe_allow_html=True)
+        
+    with col_ats_issues:
+        st.markdown(f"""
+        <div class="glass-card" style="border-color:rgba(124,58,237,0.2); height: 100%;">
+            <h3 style="font-size:1rem; font-weight:600; color:#C4B5FD; margin-top:0; margin-bottom:0.75rem;">⚠️ Key Optimization Gaps</h3>
+        """, unsafe_allow_html=True)
+        if ats_issues:
+            for issue in ats_issues:
+                st.markdown(f"<div style='font-size:0.82rem; color:#EF4444; margin-bottom:0.4rem;'>• {issue}</div>", unsafe_allow_html=True)
+        else:
+            st.markdown("<div style='font-size:0.85rem; color:#34D399;'>✨ Your resume meets all standard ATS check guidelines!</div>", unsafe_allow_html=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown("<br>", unsafe_allow_html=True)
@@ -775,13 +778,23 @@ if analyze_clicked and resume_file and jd_file:
          f"❌ Missing ({len(missing_skills)})",
          f"🔵 Bonus ({len(extra_skills)})"]
     )
+
     with tab_matched:
         st.markdown(
             '<p style="font-size:0.82rem;color:#64748B;margin-bottom:0.75rem;">'
-            'Present in <em>both</em> your resume and the job description.</p>'
-            + render_skill_chips(matched_skills, "chip-matched"),
+            'Present in <em>both</em> your resume and the job description, showing where they were detected in your profile.</p>',
             unsafe_allow_html=True,
         )
+        for skill in matched_skills:
+            evidence_list = skill_evidence.get(skill, ["Skills Section"])
+            evidence_str = ", ".join(evidence_list)
+            st.markdown(
+                f'<div style="margin-bottom:0.6rem; padding:0.5rem 0.8rem; background:rgba(52,211,153,0.04); border-left:3px solid #34D399; border-radius:4px;">'
+                f'<strong style="color:#6EE7B7; font-size:0.88rem;">{skill.title()}</strong>'
+                f'<div style="font-size:0.75rem; color:#94A3B8; margin-top:0.15rem;">📍 Found in: <em>{evidence_str}</em></div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
     with tab_missing:
         st.markdown(
             '<p style="font-size:0.82rem;color:#64748B;margin-bottom:0.75rem;">'
@@ -795,9 +808,9 @@ if analyze_clicked and resume_file and jd_file:
         if important_missing:
             st.markdown("<p style='font-size:0.82rem;font-weight:600;color:#FBBF24;margin:0.5rem 0 0.2rem 0;'>🟡 Important Gaps (Mentioned 2 times in JD)</p>", unsafe_allow_html=True)
             st.markdown(render_skill_chips(important_missing, "chip-neutral"), unsafe_allow_html=True)
-        if optional_missing:
-            st.markdown("<p style='font-size:0.82rem;font-weight:600;color:#93C5FD;margin:0.5rem 0 0.2rem 0;'>🔵 Optional Gaps (Mentioned 1 time in JD)</p>", unsafe_allow_html=True)
-            st.markdown(render_skill_chips(optional_missing, "chip-extra"), unsafe_allow_html=True)
+        if nice_to_have_missing:
+            st.markdown("<p style='font-size:0.82rem;font-weight:600;color:#93C5FD;margin:0.5rem 0 0.2rem 0;'>🔵 Nice to Have (Mentioned 1 time in JD)</p>", unsafe_allow_html=True)
+            st.markdown(render_skill_chips(nice_to_have_missing, "chip-extra"), unsafe_allow_html=True)
     with tab_bonus:
         st.markdown(
             '<p style="font-size:0.82rem;color:#64748B;margin-bottom:0.75rem;">'
@@ -927,7 +940,7 @@ if analyze_clicked and resume_file and jd_file:
     </div>
     """, unsafe_allow_html=True)
 
-    if project_scores:
+    if projects:
         # Legend
         st.markdown("""
         <div style="display:flex;gap:1.5rem;font-size:0.75rem;color:#64748B;
@@ -938,23 +951,14 @@ if analyze_clicked and resume_file and jd_file:
         </div>
         """, unsafe_allow_html=True)
 
-        for proj, rel_score, matching_jd in project_scores:
-            # Colour coding
-            if rel_score >= 40:
-                p_color = "#34D399"
-                p_bg    = "rgba(52,211,153,0.06)"
-                p_border= "rgba(52,211,153,0.25)"
-                p_label = "High Relevance"
-            elif rel_score >= 20:
-                p_color = "#FBBF24"
-                p_bg    = "rgba(251,191,36,0.06)"
-                p_border= "rgba(251,191,36,0.25)"
-                p_label = "Moderate Relevance"
-            else:
-                p_color = "#EF4444"
-                p_bg    = "rgba(239,68,68,0.05)"
-                p_border= "rgba(239,68,68,0.2)"
-                p_label = "Low Relevance"
+        for proj in projects:
+            rel_score = proj["relevance_score"]
+            matching_jd = proj["matching_jd"]
+            p_color = proj["color"]
+            p_bg = proj["bg"]
+            p_border = proj["border"]
+            p_label = proj["label"]
+            insight = proj["insight"]
 
             # Tech chips for this project
             proj_tech_html = render_skill_chips(proj["tech"], "chip-extra") if proj["tech"] \
@@ -963,17 +967,6 @@ if analyze_clicked and resume_file and jd_file:
             # Matching JD tech chips (subset of project tech that's in JD)
             jd_match_html = render_skill_chips(matching_jd, "chip-matched") if matching_jd \
                 else '<span style="font-size:0.75rem;color:#475569;">None</span>'
-
-            # Relevance insight text
-            if rel_score >= 40:
-                insight = f"Highly aligned — {len(matching_jd)} required technologies used."
-            elif rel_score >= 20:
-                insight = f"Partially aligned — {len(matching_jd)} required technologies used."
-            else:
-                if not proj["tech"]:
-                    insight = "Add technologies to this project to show JD relevance."
-                else:
-                    insight = "Uses different technologies than required by the JD."
 
             bar_width = min(rel_score, 100)
             st.markdown(f"""

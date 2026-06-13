@@ -17,29 +17,17 @@ import logging
 
 import pdfplumber
 import PyPDF2
+import streamlit as st
 
 # Set up module-level logger
 logger = logging.getLogger(__name__)
 
 
-def extract_text_from_pdf(uploaded_file) -> str:
+@st.cache_data
+def extract_text_from_pdf_bytes(file_bytes: bytes, file_name: str) -> str:
     """
-    Extract plain text from an uploaded PDF file object.
-
-    Strategy:
-        - First attempts extraction via pdfplumber (more accurate).
-        - Falls back to PyPDF2 if pdfplumber yields empty text or raises an error.
-
-    Args:
-        uploaded_file: A file-like object (e.g., Streamlit UploadedFile or BytesIO).
-
-    Returns:
-        A cleaned string containing all extracted text from the PDF.
-        Returns an empty string if extraction fails completely.
+    Extract plain text from PDF bytes. Caches the output using Streamlit's cache_data.
     """
-    # Read raw bytes from the uploaded file so both libraries can seek freely
-    file_bytes = uploaded_file.read()
-
     # ── Attempt 1: pdfplumber ─────────────────────────────────────────────────
     text = _extract_with_pdfplumber(file_bytes)
 
@@ -52,6 +40,16 @@ def extract_text_from_pdf(uploaded_file) -> str:
         logger.error("Both extraction methods returned empty text.")
 
     return _clean_text(text)
+
+
+def extract_text_from_pdf(uploaded_file) -> str:
+    """
+    Extract plain text from an uploaded PDF file object.
+    Uses cached bytes extraction to speed up subsequent runs.
+    """
+    file_bytes = uploaded_file.read()
+    uploaded_file.seek(0)  # Reset stream position
+    return extract_text_from_pdf_bytes(file_bytes, uploaded_file.name)
 
 
 # ── Private helpers ───────────────────────────────────────────────────────────

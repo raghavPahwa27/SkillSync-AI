@@ -18,6 +18,7 @@
 
 import re
 from typing import Set, Dict, List
+import streamlit as st
 
 from assets.skills_database import ALL_SKILLS
 
@@ -100,6 +101,7 @@ def infer_implied_skills(text: str) -> Set[str]:
     return inferred
 
 
+@st.cache_data
 def extract_skills(text: str) -> Set[str]:
     """
     Extract all recognised skills from the provided text.
