@@ -7,7 +7,7 @@
 #   - Semantic similarity via sentence-transformers (all-MiniLM-L6-v2)
 #   - Score tier system with industry context + confidence messaging
 #   - "Why this score" breakdown (strengths + specific gap reasons)
-#   - Domain knowledge profiling (candidate vs JD domains)
+#   - Domain inference mapping (candidate vs JD domains)
 #   - Per-project JD relevance scoring
 #   - Section-level JD relevance scores
 #   - Experience highlights
@@ -141,6 +141,7 @@ html, body, [data-testid="stAppViewContainer"] {
 .chip-missing { background:rgba(239,68,68,0.10); border:1px solid rgba(239,68,68,0.33); color:#FCA5A5; }
 .chip-extra   { background:rgba(96,165,250,0.10); border:1px solid rgba(96,165,250,0.33); color:#93C5FD; }
 .chip-neutral { background:rgba(167,139,250,0.10); border:1px solid rgba(167,139,250,0.3); color:#C4B5FD; }
+.chip-freq    { background:rgba(124,58,237,0.1); border:1px solid rgba(124,58,237,0.3); color:#C4B5FD; display:inline-block; padding:0.25rem 0.65rem; border-radius:8px; font-size:0.75rem; font-weight:500; margin:0.2rem; }
 
 /* ── Section header ── */
 .section-header { display:flex; align-items:center; gap:0.6rem; margin-bottom:1rem; }
@@ -238,7 +239,7 @@ div[data-testid="stFileUploaderDropzone"] { background:transparent !important; }
 import re
 from utils.parser          import extract_text_from_pdf
 from utils.similarity      import get_embedding, calculate_cosine_similarity
-from utils.skill_extractor import extract_skills, compare_skills, infer_implied_skills
+from utils.skill_extractor import extract_skills, compare_skills, infer_implied_skills, get_jd_skill_frequencies
 from utils.resume_analyzer import analyze_resume, get_section_scores
 from utils.topic_analyzer  import get_domain_alignment
 from utils.feedback_engine import (
@@ -282,6 +283,21 @@ def render_score_ring(score: float, tier: dict) -> str:
                 <div class="score-number" style="color:{color}">{score:.0f}%</div>
                 <div class="score-label">Match Score</div>
             </div>
+        </div>
+    </div>
+    """
+
+
+def render_breakdown_row(label: str, score: float, color: str) -> str:
+    """Render a horizontal progress bar for a breakdown score."""
+    return f"""
+    <div style="margin-bottom:0.6rem; font-size:0.78rem;">
+        <div style="display:flex; justify-content:space-between; margin-bottom:0.15rem; color:#94A3B8;">
+            <span>{label}</span>
+            <span style="font-weight:600; color:{color};">{score:.0f}%</span>
+        </div>
+        <div style="height:5px; background:rgba(255,255,255,0.06); border-radius:100px; overflow:hidden;">
+            <div style="height:100%; width:{min(score, 100):.1f}%; background:{color}; border-radius:100px;"></div>
         </div>
     </div>
     """
@@ -521,13 +537,10 @@ if analyze_clicked and resume_file and jd_file:
         st.error("❌ Could not extract text from the Job Description PDF.")
         st.stop()
 
-    # Step 2: Semantic embeddings + overall score
-    with st.spinner("🧠 Generating semantic embeddings (first run downloads ~90 MB model)..."):
-        resume_vec  = get_embedding(resume_text)
-        jd_vec      = get_embedding(jd_text)
-        raw_score   = calculate_cosine_similarity(resume_vec, jd_vec)
-        # Apply +12% score boost, capped at 99.0%
-        match_score = min(raw_score + 12.0, 99.0)
+    # Step 2: Deep section + project analysis
+    with st.spinner("🔬 Analysing resume sections, projects & experience..."):
+        deep_analysis  = analyze_resume(resume_text, jd_text)
+        section_scores = get_section_scores(deep_analysis["section_texts"], jd_text)
 
     # Step 3: Skill extraction + comparison
     with st.spinner("🔍 Extracting and comparing skills..."):
@@ -548,13 +561,34 @@ if analyze_clicked and resume_file and jd_file:
     extra_skills    = skill_report["extra"]
     total_jd_skills = len(jd_skills)
 
-    # Step 4: Deep section + project analysis
-    with st.spinner("🔬 Analysing resume sections, projects & experience..."):
-        deep_analysis  = analyze_resume(resume_text, jd_text)
-        section_scores = get_section_scores(deep_analysis["section_texts"], jd_text)
+    # Calculate JD keyword frequencies
+    jd_frequencies = get_jd_skill_frequencies(jd_text, jd_skills)
 
-    # Step 5: Domain profiling
-    with st.spinner("🗺️ Profiling domain knowledge..."):
+    # Group missing skills into priority buckets based on JD mention frequency
+    critical_missing  = []
+    important_missing = []
+    optional_missing  = []
+    for skill in missing_skills:
+        freq = jd_frequencies.get(skill, 1)
+        if freq >= 3:
+            critical_missing.append(skill)
+        elif freq == 2:
+            important_missing.append(skill)
+        else:
+            optional_missing.append(skill)
+
+    # Step 4: Calculate Weighted Match Score & Component Breakdown
+    skills_score     = (len(matched_skills) / len(jd_skills) * 100) if jd_skills else 100.0
+    experience_score = section_scores.get("experience", 0.0)
+    projects_score   = section_scores.get("projects", 0.0)
+    education_score  = section_scores.get("education", 0.0)
+
+    raw_weighted_score = 0.4 * skills_score + 0.2 * experience_score + 0.4 * projects_score
+    # Apply +12% score boost, capped at 99.0%
+    match_score = min(raw_weighted_score + 12.0, 99.0)
+
+    # Step 5: Domain Inference Mapping
+    with st.spinner("🗺️ Mapping technical domains..."):
         domain_alignment = get_domain_alignment(resume_skills, jd_skills)
 
     # Step 6: Feedback generation (fast, rule-based)
@@ -628,6 +662,16 @@ if analyze_clicked and resume_file and jd_file:
             f'💡 <em>{tier["industry_note"]}</em></div>',
             unsafe_allow_html=True,
         )
+        
+        # Match Breakdown
+        st.markdown("<div style='margin-top: 1.2rem; margin-bottom: 1.2rem;'>", unsafe_allow_html=True)
+        st.markdown("<h4 style='font-size:0.85rem;color:#C4B5FD;margin-bottom:0.6rem;text-transform:uppercase;letter-spacing:0.05em;'>📊 Match Breakdown</h4>", unsafe_allow_html=True)
+        st.markdown(render_breakdown_row("Skills Match", skills_score, "#A78BFA"), unsafe_allow_html=True)
+        st.markdown(render_breakdown_row("Projects Match", projects_score, "#34D399"), unsafe_allow_html=True)
+        st.markdown(render_breakdown_row("Experience Match", experience_score, "#60A5FA"), unsafe_allow_html=True)
+        st.markdown(render_breakdown_row("Education Match", education_score, "#FBBF24"), unsafe_allow_html=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+
         # Industry scale
         st.markdown(render_industry_scale(match_score), unsafe_allow_html=True)
         st.markdown("</div>", unsafe_allow_html=True)
@@ -718,6 +762,12 @@ if analyze_clicked and resume_file and jd_file:
                                 "linear-gradient(90deg,#34D399,#10B981)"), unsafe_allow_html=True)
     st.markdown(render_stat_bar("Missing", len(missing_skills), total_jd_skills,
                                 "linear-gradient(90deg,#EF4444,#F87171)"), unsafe_allow_html=True)
+    
+    if jd_frequencies:
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown("<h4 style='font-size:0.85rem;color:#C4B5FD;margin-bottom:0.6rem;text-transform:uppercase;letter-spacing:0.05em;'>📊 Top JD Keyword Frequency</h4>", unsafe_allow_html=True)
+        freq_badges = "".join(f'<span class="chip-freq">{skill.title()} ({count})</span>' for skill, count in list(jd_frequencies.items())[:10])
+        st.markdown(f'<div style="display:flex; flex-wrap:wrap; gap:0.5rem;">{freq_badges}</div>', unsafe_allow_html=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
     tab_matched, tab_missing, tab_bonus = st.tabs(
@@ -736,10 +786,18 @@ if analyze_clicked and resume_file and jd_file:
         st.markdown(
             '<p style="font-size:0.82rem;color:#64748B;margin-bottom:0.75rem;">'
             'Required by the JD but <em>not found</em> in your resume. '
-            'Prioritise adding these if you have the experience.</p>'
-            + render_skill_chips(missing_skills, "chip-missing"),
+            'Gaps are prioritized based on how frequently they are mentioned in the JD.</p>',
             unsafe_allow_html=True,
         )
+        if critical_missing:
+            st.markdown("<p style='font-size:0.82rem;font-weight:600;color:#FCA5A5;margin:0.5rem 0 0.2rem 0;'>🔴 Critical Gaps (Mentioned 3+ times in JD)</p>", unsafe_allow_html=True)
+            st.markdown(render_skill_chips(critical_missing, "chip-missing"), unsafe_allow_html=True)
+        if important_missing:
+            st.markdown("<p style='font-size:0.82rem;font-weight:600;color:#FBBF24;margin:0.5rem 0 0.2rem 0;'>🟡 Important Gaps (Mentioned 2 times in JD)</p>", unsafe_allow_html=True)
+            st.markdown(render_skill_chips(important_missing, "chip-neutral"), unsafe_allow_html=True)
+        if optional_missing:
+            st.markdown("<p style='font-size:0.82rem;font-weight:600;color:#93C5FD;margin:0.5rem 0 0.2rem 0;'>🔵 Optional Gaps (Mentioned 1 time in JD)</p>", unsafe_allow_html=True)
+            st.markdown(render_skill_chips(optional_missing, "chip-extra"), unsafe_allow_html=True)
     with tab_bonus:
         st.markdown(
             '<p style="font-size:0.82rem;color:#64748B;margin-bottom:0.75rem;">'
@@ -752,15 +810,15 @@ if analyze_clicked and resume_file and jd_file:
     st.markdown("<hr class='custom-divider'>", unsafe_allow_html=True)
 
     # ─────────────────────────────────────────────────────────────────────────
-    # PANEL 4: DOMAIN KNOWLEDGE MAP
+    # PANEL 4: DOMAIN INFERENCE MAP
     # ─────────────────────────────────────────────────────────────────────────
     st.markdown("""
     <div style="text-align:center;margin-bottom:1.5rem;">
         <h2 style="font-size:1.4rem;font-weight:700;color:#E2E8F0;margin:0 0 0.3rem;">
-            🗺️ Domain Knowledge Map
+            🗺️ Domain Inference Map
         </h2>
         <p style="font-size:0.83rem;color:#64748B;margin:0;">
-            How your expertise domains align with what this role demands
+            Inferred domain alignment based on technical skill mapping
         </p>
     </div>
     """, unsafe_allow_html=True)

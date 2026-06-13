@@ -158,3 +158,21 @@ def compare_skills(resume_skills: Set[str], jd_skills: Set[str]) -> dict:
         "missing": sorted(missing),
         "extra":   sorted(extra),
     }
+
+
+def get_jd_skill_frequencies(jd_text: str, jd_skills: Set[str]) -> Dict[str, int]:
+    """
+    Count the frequency of each JD skill inside the Job Description.
+    Returns a dictionary of {skill: count} sorted by frequency descending.
+    """
+    if not jd_text or not jd_skills:
+        return {}
+
+    normalised = jd_text.lower()
+    counts = {}
+    for skill in jd_skills:
+        pattern = re.escape(skill.lower())
+        occurrences = len(re.findall(rf"\b{pattern}\b", normalised))
+        counts[skill] = max(occurrences, 1)
+
+    return dict(sorted(counts.items(), key=lambda x: x[1], reverse=True))

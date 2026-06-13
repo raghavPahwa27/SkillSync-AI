@@ -25,6 +25,7 @@ import logging
 from typing import Optional
 
 import numpy as np
+import streamlit as st
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 
@@ -35,44 +36,25 @@ logger = logging.getLogger(__name__)
 # It produces 384-dimensional embeddings and runs efficiently on CPU.
 MODEL_NAME = "all-MiniLM-L6-v2"
 
-# Module-level cache so the model is only loaded once per Python session.
-_model: Optional[SentenceTransformer] = None
 
-
-def _load_model() -> SentenceTransformer:
+@st.cache_resource
+def load_sentence_transformer_model() -> SentenceTransformer:
     """
-    Lazily load and cache the SentenceTransformer model.
-
-    The model is downloaded from HuggingFace Hub on first use and cached
-    locally in the default HuggingFace cache directory.
-
-    Returns:
-        Loaded SentenceTransformer instance.
+    Load and cache the SentenceTransformer model using Streamlit's resource cache.
     """
-    global _model
-    if _model is None:
-        logger.info(f"Loading SentenceTransformer model: {MODEL_NAME}")
-        _model = SentenceTransformer(MODEL_NAME)
-        logger.info("Model loaded successfully.")
-    return _model
+    logger.info(f"Loading SentenceTransformer model: {MODEL_NAME}")
+    model = SentenceTransformer(MODEL_NAME)
+    logger.info("Model loaded successfully.")
+    return model
 
 
+@st.cache_data
 def get_embedding(text: str) -> np.ndarray:
     """
-    Generate a semantic embedding vector for the given text.
-
-    The text is encoded into a fixed-size (384-d) dense float32 vector that
-    captures its semantic meaning. Similar texts will have vectors that are
-    close together in embedding space.
-
-    Args:
-        text: Input string (e.g., full resume text or job description text).
-              Long texts are handled internally by the model via chunking.
-
-    Returns:
-        A 1-D NumPy array of shape (384,) representing the text embedding.
+    Generate a semantic embedding vector for the given text. Caches the result
+    so that document embeddings are only computed once per unique text input.
     """
-    model = _load_model()
+    model = load_sentence_transformer_model()
 
     # encode() returns a 2-D array (batch_size × embedding_dim).
     # We pass a single string so we take index [0] to get a 1-D vector.
