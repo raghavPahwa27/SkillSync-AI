@@ -232,6 +232,78 @@ div[data-testid="stFileUploaderDropzone"] { background:transparent !important; }
     box-shadow:0 8px 30px rgba(124,58,237,0.5) !important;
 }
 #MainMenu, footer, header { visibility:hidden; }
+
+/* ── Phase 2: Editor page ── */
+.editor-hero { text-align:center; padding:2rem 1rem 1.5rem; }
+.editor-hero h2 {
+    font-size:2.2rem; font-weight:800;
+    background:linear-gradient(135deg,#A78BFA,#60A5FA,#34D399);
+    -webkit-background-clip:text; -webkit-text-fill-color:transparent;
+    background-clip:text; margin:0 0 0.4rem;
+}
+.editor-hero p { font-size:0.95rem; color:#94A3B8; max-width:560px; margin:0 auto; }
+
+/* diff panels */
+.diff-panel-original {
+    background:rgba(15,15,26,0.7); border:1px solid rgba(255,255,255,0.08);
+    border-radius:14px; padding:1rem 1.2rem;
+}
+.diff-panel-suggestion {
+    background:rgba(124,58,237,0.07); border:1px solid rgba(124,58,237,0.35);
+    border-radius:14px; padding:1rem 1.2rem;
+    box-shadow:0 0 24px rgba(124,58,237,0.08);
+}
+.diff-label {
+    font-size:0.68rem; font-weight:700; text-transform:uppercase;
+    letter-spacing:0.1em; margin-bottom:0.5rem;
+}
+.diff-label-orig  { color:#475569; }
+.diff-label-sugg  { color:#A78BFA; }
+
+/* status badges */
+.status-badge {
+    display:inline-flex; align-items:center; gap:0.3rem;
+    font-size:0.7rem; font-weight:600; text-transform:uppercase;
+    letter-spacing:0.08em; padding:0.2rem 0.65rem; border-radius:100px;
+    margin-bottom:0.6rem;
+}
+.status-idle      { background:rgba(100,116,139,0.2); color:#64748B; border:1px solid rgba(100,116,139,0.3); }
+.status-pending   { background:rgba(251,191,36,0.15); color:#FBBF24; border:1px solid rgba(251,191,36,0.35); }
+.status-accepted  { background:rgba(52,211,153,0.12); color:#34D399; border:1px solid rgba(52,211,153,0.35); }
+.status-rejected  { background:rgba(239,68,68,0.12);  color:#EF4444; border:1px solid rgba(239,68,68,0.3); }
+
+/* action toolbar */
+.action-toolbar {
+    display:flex; flex-wrap:wrap; gap:0.4rem; margin-top:0.6rem;
+}
+.toolbar-btn {
+    background:rgba(124,58,237,0.1); border:1px solid rgba(124,58,237,0.3);
+    border-radius:8px; color:#C4B5FD; font-size:0.76rem; font-weight:600;
+    padding:0.3rem 0.8rem; cursor:pointer; transition:all 0.2s ease;
+    font-family:'Inter',sans-serif;
+}
+.toolbar-btn:hover { background:rgba(124,58,237,0.25); border-color:rgba(124,58,237,0.6); }
+
+/* download panel */
+.download-panel {
+    background:linear-gradient(135deg,rgba(124,58,237,0.12),rgba(59,130,246,0.08));
+    border:1px solid rgba(124,58,237,0.3); border-radius:20px;
+    padding:2rem; text-align:center; margin-top:2rem;
+}
+.download-panel h3 {
+    font-size:1.3rem; font-weight:700; color:#E2E8F0; margin:0 0 0.4rem;
+}
+.download-panel p { font-size:0.85rem; color:#64748B; margin:0 0 1.5rem; }
+
+/* CTA improve button (override default button for specific class) */
+.improve-cta-wrap .stButton > button {
+    background:linear-gradient(135deg,#059669,#10B981) !important;
+    box-shadow:0 4px 20px rgba(16,185,129,0.35) !important;
+    font-size:1.05rem !important; padding:0.85rem 2rem !important;
+}
+.improve-cta-wrap .stButton > button:hover {
+    box-shadow:0 8px 32px rgba(16,185,129,0.55) !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -239,6 +311,8 @@ div[data-testid="stFileUploaderDropzone"] { background:transparent !important; }
 import re
 from utils.parser import extract_text_from_pdf
 from utils.orchestrator import run_analysis_pipeline
+from utils.gemini_service import generate_section_suggestion
+from utils.resume_rebuilder import export_resume
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -442,11 +516,47 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
     st.markdown("---")
+
+    # ── Gemini API key for Phase 2 editor ─────────────────────────────────────
+    st.markdown("## 🔑 AI Editor Key")
     st.markdown("""
-    <div style="font-size:0.75rem;color:#334155;text-align:center;">
-        SkillSync AI v1.1 · Built with Streamlit
+    <div style="font-size:0.78rem;color:#64748B;line-height:1.6;margin-bottom:0.5rem;">
+        Required for the AI Resume Editor.<br>
+        Get a free key at
+        <a href="https://aistudio.google.com/apikey" target="_blank"
+           style="color:#A78BFA;">aistudio.google.com</a>
     </div>
     """, unsafe_allow_html=True)
+    gemini_key_input = st.text_input(
+        "Gemini API Key",
+        type="password",
+        placeholder="AIza...",
+        key="gemini_api_key_input",
+        label_visibility="collapsed",
+    )
+    # Persist the key in session state
+    if gemini_key_input:
+        st.session_state["gemini_api_key"] = gemini_key_input
+    # Try Streamlit secrets fallback
+    elif "gemini_api_key" not in st.session_state:
+        try:
+            st.session_state["gemini_api_key"] = st.secrets.get("GEMINI_API_KEY", "")
+        except Exception:
+            st.session_state["gemini_api_key"] = ""
+
+    if st.session_state.get("gemini_api_key"):
+        st.markdown(
+            '<div style="font-size:0.75rem;color:#34D399;margin-top:0.3rem;">✅ Key configured</div>',
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("---")
+    st.markdown("""
+    <div style="font-size:0.75rem;color:#334155;text-align:center;">
+        SkillSync AI v2.0 · Built with Streamlit
+    </div>
+    """, unsafe_allow_html=True)
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1168,5 +1278,279 @@ if analyze_clicked and resume_file and jd_file:
         <div style="font-size:0.84rem;color:#64748B;max-width:520px;margin:0 auto;line-height:1.65;">
             {tier['confidence']}
         </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # ── Phase 2 CTA ───────────────────────────────────────────────────────────
+    st.markdown("<hr class='custom-divider'>", unsafe_allow_html=True)
+    st.markdown("""
+    <div style="text-align:center;margin-bottom:1rem;">
+        <div style="font-size:0.75rem;font-weight:600;letter-spacing:0.1em;
+            text-transform:uppercase;color:#10B981;margin-bottom:0.4rem;">
+            ✨ Phase 2 — AI Resume Editor
+        </div>
+        <h2 style="font-size:1.4rem;font-weight:700;color:#E2E8F0;margin:0 0 0.3rem;">
+            Ready to fix those gaps?
+        </h2>
+        <p style="font-size:0.85rem;color:#64748B;max-width:500px;margin:0 auto;">
+            Open the interactive editor — accept, reject, or manually tweak
+            every AI suggestion, then download your upgraded resume as DOCX or PDF.
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
+    _, cta_col, _ = st.columns([1, 2, 1])
+    with cta_col:
+        st.markdown('<div class="improve-cta-wrap">', unsafe_allow_html=True)
+        if st.button("✨  Improve My Resume", key="open_editor_btn"):
+            EDITABLE_SECTIONS_INIT = ["summary", "experience", "projects", "skills", "education"]
+            st.session_state["editor_active"]         = True
+            st.session_state["editor_resume_text"]    = resume_text
+            st.session_state["editor_jd_text"]        = jd_text
+            st.session_state["editor_section_texts"]  = section_texts
+            st.session_state["editor_missing_skills"] = (
+                list(critical_missing) + list(important_missing) + list(nice_to_have_missing)
+            )
+            st.session_state["editor_candidate_name"] = ""
+            for _sec in EDITABLE_SECTIONS_INIT:
+                st.session_state[f"edit_text_{_sec}"] = section_texts.get(_sec, "")
+                st.session_state[f"edit_sugg_{_sec}"] = ""
+                st.session_state[f"edit_stat_{_sec}"] = "idle"
+            st.rerun()
+        st.markdown('</div>', unsafe_allow_html=True)
+
+
+# =============================================================================
+# PHASE 2 — AI RESUME EDITOR PAGE
+# =============================================================================
+if st.session_state.get("editor_active"):
+
+    EDITABLE_SECTIONS = ["summary", "experience", "projects", "skills", "education"]
+    SECTION_ICONS_ED = {
+        "summary": "👤", "experience": "💼", "projects": "🚀",
+        "skills": "⚙️",  "education": "🎓",
+    }
+    SECTION_DISPLAY_ED = {
+        "summary": "Professional Summary", "experience": "Work Experience",
+        "projects": "Projects", "skills": "Technical Skills", "education": "Education",
+    }
+    ACTION_LABELS = {
+        "improve":      "✨ Improve",
+        "ats_friendly": "🎯 ATS Friendly",
+        "shorten":      "✂️ Shorten",
+        "expand":       "🔭 Expand",
+        "add_metrics":  "📊 Add Metrics",
+    }
+
+    _jd_text_ed        = st.session_state.get("editor_jd_text", "")
+    _missing_skills_ed = st.session_state.get("editor_missing_skills", [])
+    _gemini_key        = st.session_state.get("gemini_api_key", "")
+
+    # ── Back button + header ──────────────────────────────────────────────────
+    st.markdown("<br>", unsafe_allow_html=True)
+    col_back_ed, _ = st.columns([1, 9])
+    with col_back_ed:
+        if st.button("← Back to Analysis", key="editor_back_btn"):
+            st.session_state["editor_active"] = False
+            st.rerun()
+
+    st.markdown("""
+    <div class="editor-hero">
+        <div class="badge" style="background:linear-gradient(135deg,rgba(16,185,129,0.25),rgba(59,130,246,0.2));
+            border:1px solid rgba(16,185,129,0.4);color:#34D399;">
+            ✨ Phase 2 · AI Resume Editor
+        </div>
+        <h2>Your AI-Powered Resume Editor</h2>
+        <p>Review each section side-by-side. Accept, reject, or manually edit
+        every suggestion. You stay in full control.</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    _, name_col_ed, _ = st.columns([1, 2, 1])
+    with name_col_ed:
+        cand_name = st.text_input(
+            "Your full name (used in the exported resume header)",
+            value=st.session_state.get("editor_candidate_name", ""),
+            placeholder="e.g. Raghav Pahwa",
+            key="editor_name_input",
+        )
+        st.session_state["editor_candidate_name"] = cand_name
+
+    st.markdown("<hr class='custom-divider'>", unsafe_allow_html=True)
+
+    # ── Section-by-section editor panels ─────────────────────────────────────
+    for sec in EDITABLE_SECTIONS:
+        icon    = SECTION_ICONS_ED.get(sec, "📋")
+        display = SECTION_DISPLAY_ED.get(sec, sec.title())
+        k_text  = f"edit_text_{sec}"
+        k_sugg  = f"edit_sugg_{sec}"
+        k_stat  = f"edit_stat_{sec}"
+
+        if k_text not in st.session_state:
+            st.session_state[k_text] = st.session_state.get(
+                "editor_section_texts", {}).get(sec, "")
+        if k_sugg not in st.session_state:
+            st.session_state[k_sugg] = ""
+        if k_stat not in st.session_state:
+            st.session_state[k_stat] = "idle"
+
+        status = st.session_state[k_stat]
+        badge_map = {
+            "idle":     ("status-idle",     "✏️ Not Generated"),
+            "accepted": ("status-accepted", "✅ Accepted"),
+            "rejected": ("status-rejected", "❌ Rejected"),
+        }
+        badge_cls, badge_label = badge_map.get(status, badge_map["idle"])
+
+        st.markdown(
+            f'<div class="glass-card" style="margin-bottom:1.5rem;">'
+            f'<div style="display:flex;align-items:center;gap:0.6rem;margin-bottom:1rem;">'
+            f'<span style="font-size:1.3rem;">{icon}</span>'
+            f'<h3 style="margin:0;font-size:1.05rem;font-weight:700;color:#E2E8F0;">'
+            f'{display}</h3>'
+            f'<span class="status-badge {badge_cls}">{badge_label}</span>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+        # Two-column diff layout
+        col_orig_ed, col_ai_ed = st.columns(2, gap="large")
+
+        with col_orig_ed:
+            st.markdown('<div class="diff-label diff-label-orig">📄 Current</div>',
+                        unsafe_allow_html=True)
+            edited_val = st.text_area(
+                f"cur_{sec}",
+                value=st.session_state[k_text],
+                height=185,
+                key=f"textarea_cur_{sec}",
+                label_visibility="collapsed",
+                placeholder=f"Your current {display} section...",
+            )
+            st.session_state[k_text] = edited_val
+
+        with col_ai_ed:
+            st.markdown('<div class="diff-label diff-label-sugg">⚡ AI Suggestion</div>',
+                        unsafe_allow_html=True)
+            sugg_val = st.text_area(
+                f"sugg_{sec}",
+                value=st.session_state[k_sugg],
+                height=185,
+                key=f"textarea_sugg_{sec}",
+                label_visibility="collapsed",
+                placeholder="Click an action below to generate an AI suggestion...",
+            )
+            st.session_state[k_sugg] = sugg_val
+
+        # Accept / Reject / Reset row
+        has_sugg = bool(st.session_state[k_sugg].strip())
+        ab1, ab2, ab3, ab_space = st.columns([1.2, 1.2, 1, 4])
+        with ab1:
+            if st.button("✅ Accept", key=f"acc_{sec}", disabled=(not has_sugg)):
+                st.session_state[k_text] = st.session_state[k_sugg]
+                st.session_state[k_sugg] = ""
+                st.session_state[k_stat] = "accepted"
+                st.rerun()
+        with ab2:
+            if st.button("❌ Reject", key=f"rej_{sec}", disabled=(not has_sugg)):
+                st.session_state[k_sugg] = ""
+                st.session_state[k_stat] = "rejected"
+                st.rerun()
+        with ab3:
+            if st.button("🔄 Reset", key=f"rst_{sec}"):
+                orig_txt = st.session_state.get("editor_section_texts", {}).get(sec, "")
+                st.session_state[k_text] = orig_txt
+                st.session_state[k_sugg] = ""
+                st.session_state[k_stat] = "idle"
+                st.rerun()
+
+        # AI toolbar
+        st.markdown(
+            '<div style="margin-top:0.75rem;font-size:0.73rem;color:#475569;margin-bottom:0.3rem;">'
+            '🤖 Ask AI to rewrite this section:</div>',
+            unsafe_allow_html=True,
+        )
+        tact_cols = st.columns(len(ACTION_LABELS))
+        for t_idx, (act_key, act_label) in enumerate(ACTION_LABELS.items()):
+            with tact_cols[t_idx]:
+                if st.button(act_label, key=f"act_{sec}_{act_key}"):
+                    cur_val = st.session_state.get(k_text, "").strip()
+                    if not cur_val:
+                        st.warning(f"The {display} section is empty — add some text first.")
+                    elif not _gemini_key:
+                        st.error("🔑 Please enter your Gemini API key in the sidebar.")
+                    else:
+                        with st.spinner(f"⚡ Generating {act_label} for {display}..."):
+                            ok_ai, res_ai = generate_section_suggestion(
+                                section_name=sec,
+                                current_text=cur_val,
+                                jd_text=_jd_text_ed,
+                                missing_skills=_missing_skills_ed,
+                                action=act_key,
+                                api_key=_gemini_key,
+                            )
+                        if ok_ai:
+                            st.session_state[k_sugg] = res_ai
+                            st.session_state[k_stat] = "idle"
+                            st.rerun()
+                        else:
+                            st.error(res_ai)
+
+        st.markdown("</div>", unsafe_allow_html=True)  # close glass-card
+
+    # ── Download Panel ────────────────────────────────────────────────────────
+    st.markdown("<hr class='custom-divider'>", unsafe_allow_html=True)
+    st.markdown("""
+    <div class="download-panel">
+        <h3>📥 Download Your Improved Resume</h3>
+        <p>Your accepted edits are compiled into a clean, professional document ready to send.</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    final_resume_json = {
+        sec: st.session_state.get(f"edit_text_{sec}", "")
+        for sec in EDITABLE_SECTIONS
+    }
+    final_name = (st.session_state.get("editor_candidate_name") or "Resume").strip()
+
+    accepted_count = sum(
+        1 for sec in EDITABLE_SECTIONS
+        if st.session_state.get(f"edit_stat_{sec}") == "accepted"
+    )
+    st.markdown(
+        f'<div style="text-align:center;font-size:0.82rem;color:#64748B;margin-bottom:1.2rem;">'
+        f'{accepted_count} section(s) updated with AI suggestions</div>',
+        unsafe_allow_html=True,
+    )
+
+    dl_col_a, dl_col_b, dl_col_c = st.columns([1, 1, 2])
+    with dl_col_a:
+        ok_docx, docx_bytes, _ = export_resume(final_resume_json, final_name, fmt="docx")
+        if ok_docx and docx_bytes:
+            st.download_button(
+                label="📄 Download DOCX",
+                data=docx_bytes,
+                file_name=f"{final_name.replace(' ', '_')}_Resume.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                key="dl_docx_btn",
+            )
+        else:
+            st.error("DOCX export unavailable. Run: pip install python-docx")
+
+    with dl_col_b:
+        ok_pdf, pdf_bytes, pdf_err_msg = export_resume(final_resume_json, final_name, fmt="pdf")
+        if ok_pdf and pdf_bytes:
+            st.download_button(
+                label="📕 Download PDF",
+                data=pdf_bytes,
+                file_name=f"{final_name.replace(' ', '_')}_Resume.pdf",
+                mime="application/pdf",
+                key="dl_pdf_btn",
+            )
+        else:
+            st.info("💡 PDF: Install Microsoft Word + docx2pdf, or reportlab.")
+
+    st.markdown("""
+    <div style="text-align:center;margin-top:1.2rem;font-size:0.76rem;color:#334155;">
+        ✏️ Edits are session-only — download before closing the tab.
     </div>
     """, unsafe_allow_html=True)

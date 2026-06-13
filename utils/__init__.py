@@ -13,4 +13,6 @@ from .feedback_engine import (
     generate_action_plan,
 )
 from .orchestrator import run_analysis_pipeline
+from .gemini_service import generate_section_suggestion, configure_gemini
+from .resume_rebuilder import export_resume
 
