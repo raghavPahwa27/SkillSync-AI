@@ -1054,7 +1054,7 @@ if analyze_clicked and resume_file and jd_file:
         st.markdown("</div>", unsafe_allow_html=True)
 
     with col_exp:
-        exp_highlights = deep_analysis.get("experience_highlights", [])
+        exp_highlights = experience_highlights
         st.markdown('<div class="glass-card">', unsafe_allow_html=True)
         st.markdown(f"""
         <div class="section-header">
