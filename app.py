@@ -573,78 +573,443 @@ st.markdown("""
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Upload Section
+# Navigation Routing & CSS
 # ─────────────────────────────────────────────────────────────────────────────
-col_r, col_j = st.columns(2, gap="large")
+if "active_tab" not in st.session_state:
+    st.session_state["active_tab"] = "analyzer"
 
-with col_r:
+st.markdown("""
+<style>
+.nav-container {
+    display: flex;
+    justify-content: center;
+    gap: 1.5rem;
+    margin-top: 1rem;
+    margin-bottom: 2.5rem;
+}
+.nav-active-wrap .stButton > button {
+    background: linear-gradient(135deg, #7C3AED, #4F46E5) !important;
+    color: white !important;
+    border: none !important;
+    border-radius: 12px !important;
+    font-weight: 700 !important;
+    font-size: 1rem !important;
+    padding: 0.6rem 2rem !important;
+    box-shadow: 0 4px 20px rgba(124, 58, 237, 0.45) !important;
+    transition: all 0.3s ease !important;
+}
+.nav-inactive-wrap .stButton > button {
+    background: rgba(26, 26, 46, 0.4) !important;
+    color: #94A3B8 !important;
+    border: 1px solid rgba(124, 58, 237, 0.2) !important;
+    border-radius: 12px !important;
+    font-weight: 600 !important;
+    font-size: 1rem !important;
+    padding: 0.6rem 2rem !important;
+    box-shadow: none !important;
+    transition: all 0.3s ease !important;
+}
+.nav-inactive-wrap .stButton > button:hover {
+    background: rgba(124, 58, 237, 0.15) !important;
+    color: #E2E8F0 !important;
+    border-color: rgba(124, 58, 237, 0.4) !important;
+    transform: translateY(-1px) !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
+# Render Nav bar
+col_nav1, col_nav2, _ = st.columns([1, 1, 2])
+with col_nav1:
+    is_active_analyzer = st.session_state["active_tab"] == "analyzer"
+    btn_class = "nav-active-wrap" if is_active_analyzer else "nav-inactive-wrap"
+    st.markdown(f'<div class="{btn_class}">', unsafe_allow_html=True)
+    if st.button("📊  Resume Analyzer", key="nav_btn_analyzer"):
+        st.session_state["active_tab"] = "analyzer"
+        st.rerun()
+    st.markdown('</div>', unsafe_allow_html=True)
+
+with col_nav2:
+    is_active_editor = st.session_state["active_tab"] == "editor"
+    btn_class = "nav-active-wrap" if is_active_editor else "nav-inactive-wrap"
+    st.markdown(f'<div class="{btn_class}">', unsafe_allow_html=True)
+    if st.button("✨  Improve Resume", key="nav_btn_editor"):
+        st.session_state["active_tab"] = "editor"
+        # Pre-initialize editor states so they can access editor directly
+        EDITABLE_SECTIONS_INIT = ["summary", "experience", "projects", "skills", "education"]
+        if "editor_missing_skills" not in st.session_state:
+            st.session_state["editor_missing_skills"] = []
+        if "editor_candidate_name" not in st.session_state:
+            st.session_state["editor_candidate_name"] = ""
+        for _sec in EDITABLE_SECTIONS_INIT:
+            if f"edit_text_{_sec}" not in st.session_state:
+                st.session_state[f"edit_text_{_sec}"] = ""
+            if f"edit_sugg_{_sec}" not in st.session_state:
+                st.session_state[f"edit_sugg_{_sec}"] = ""
+            if f"edit_stat_{_sec}" not in st.session_state:
+                st.session_state[f"edit_stat_{_sec}"] = "idle"
+        st.rerun()
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
+# =============================================================================
+# PHASE 2 — AI RESUME EDITOR PAGE
+# =============================================================================
+if st.session_state.get("active_tab") == "editor":
+
+    EDITABLE_SECTIONS = ["summary", "experience", "projects", "skills", "education"]
+    SECTION_ICONS_ED = {
+        "summary": "👤", "experience": "💼", "projects": "🚀",
+        "skills": "⚙️",  "education": "🎓",
+    }
+    SECTION_DISPLAY_ED = {
+        "summary": "Professional Summary", "experience": "Work Experience",
+        "projects": "Projects", "skills": "Technical Skills", "education": "Education",
+    }
+    ACTION_LABELS = {
+        "improve":      "✨ Improve",
+        "ats_friendly": "🎯 ATS Friendly",
+        "shorten":      "✂️ Shorten",
+        "expand":       "🔭 Expand",
+        "add_metrics":  "📊 Add Metrics",
+    }
+
+    _jd_text_ed        = st.session_state.get("editor_jd_text", "")
+    _missing_skills_ed = st.session_state.get("editor_missing_skills", [])
+    _gemini_key        = st.session_state.get("gemini_api_key", "")
+
+    # ── Back button + header ──────────────────────────────────────────────────
+    st.markdown("<br>", unsafe_allow_html=True)
+    col_back_ed, _ = st.columns([1, 9])
+    with col_back_ed:
+        if st.button("← Back to Analysis", key="editor_back_btn"):
+            st.session_state["active_tab"] = "analyzer"
+            st.rerun()
+
     st.markdown("""
-    <div class="glass-card">
-        <h3>📄 Your Resume</h3>
-        <p>Upload your resume PDF for deep analysis</p>
-    </div>""", unsafe_allow_html=True)
-    resume_file = st.file_uploader("Resume", type=["pdf"], key="resume_up",
-                                   label_visibility="collapsed")
-    if resume_file:
-        st.markdown(f"""
-        <div style="margin-top:0.75rem;padding:0.6rem 1rem;
-            background:rgba(52,211,153,0.1);border:1px solid rgba(52,211,153,0.3);
-            border-radius:10px;font-size:0.83rem;color:#6EE7B7;">
-            ✅ &nbsp;<strong>{resume_file.name}</strong> ({resume_file.size/1024:.1f} KB)
-        </div>""", unsafe_allow_html=True)
+    <div class="editor-hero">
+        <div class="badge" style="background:linear-gradient(135deg,rgba(16,185,129,0.25),rgba(59,130,246,0.2));
+            border:1px solid rgba(16,185,129,0.4);color:#34D399;">
+            ✨ Phase 2 · AI Resume Editor
+        </div>
+        <h2>Your AI-Powered Resume Editor</h2>
+        <p>Review each section side-by-side. Accept, reject, or manually edit
+        every suggestion. You stay in full control.</p>
+    </div>
+    """, unsafe_allow_html=True)
 
-with col_j:
-    st.markdown("""
-    <div class="glass-card">
-        <h3>💼 Job Description</h3>
-        <p>Upload the job description PDF you're targeting</p>
-    </div>""", unsafe_allow_html=True)
-    jd_file = st.file_uploader("JD", type=["pdf"], key="jd_up",
-                                label_visibility="collapsed")
-    if jd_file:
-        st.markdown(f"""
-        <div style="margin-top:0.75rem;padding:0.6rem 1rem;
-            background:rgba(96,165,250,0.1);border:1px solid rgba(96,165,250,0.3);
-            border-radius:10px;font-size:0.83rem;color:#93C5FD;">
-            ✅ &nbsp;<strong>{jd_file.name}</strong> ({jd_file.size/1024:.1f} KB)
-        </div>""", unsafe_allow_html=True)
+    # Informational tip if no analysis run yet
+    if not _jd_text_ed.strip():
+        st.markdown("""
+        <div style="padding:0.75rem 1rem; margin-bottom:1.5rem;
+            background:rgba(124,58,237,0.08); border:1px solid rgba(124,58,237,0.3);
+            border-radius:10px; font-size:0.85rem; color:#C4B5FD; text-align:center;">
+            💡 <strong>Tip</strong>: For highly targeted AI suggestions, go to the 
+            <strong>Resume Analyzer</strong> tab, upload your files, and run the analysis first.
+        </div>
+        """, unsafe_allow_html=True)
 
-st.markdown("<br>", unsafe_allow_html=True)
-_, btn_col, _ = st.columns([1, 2, 1])
-with btn_col:
-    analyze_clicked = st.button("🚀  Analyze My Resume",
-                                 disabled=(resume_file is None or jd_file is None))
-
-if not resume_file or not jd_file:
-    st.markdown("""
-    <div style="text-align:center;margin-top:1rem;color:#475569;font-size:0.85rem;">
-        ⬆️  Please upload both PDFs to enable analysis
-    </div>""", unsafe_allow_html=True)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Analysis Pipeline
-# ─────────────────────────────────────────────────────────────────────────────
-if analyze_clicked and resume_file and jd_file:
+    _, name_col_ed, _ = st.columns([1, 2, 1])
+    with name_col_ed:
+        cand_name = st.text_input(
+            "Your full name (used in the exported resume header)",
+            value=st.session_state.get("editor_candidate_name", ""),
+            placeholder="e.g. Raghav Pahwa",
+            key="editor_name_input",
+        )
+        st.session_state["editor_candidate_name"] = cand_name
 
     st.markdown("<hr class='custom-divider'>", unsafe_allow_html=True)
 
-    # Step 1: Extract text
-    with st.spinner("📄 Extracting text from PDFs..."):
-        resume_text = extract_text_from_pdf(resume_file)
-        jd_text     = extract_text_from_pdf(jd_file)
+    # ── Section-by-section editor panels ─────────────────────────────────────
+    for sec in EDITABLE_SECTIONS:
+        icon    = SECTION_ICONS_ED.get(sec, "📋")
+        display = SECTION_DISPLAY_ED.get(sec, sec.title())
+        k_text  = f"edit_text_{sec}"
+        k_sugg  = f"edit_sugg_{sec}"
+        k_stat  = f"edit_stat_{sec}"
 
-    if not resume_text.strip():
-        st.error("❌ Could not extract text from the Resume PDF. "
-                 "Please ensure it contains selectable (non-scanned) text.")
-        st.stop()
-    if not jd_text.strip():
-        st.error("❌ Could not extract text from the Job Description PDF.")
-        st.stop()
+        if k_text not in st.session_state:
+            st.session_state[k_text] = st.session_state.get(
+                "editor_section_texts", {}).get(sec, "")
+        if k_sugg not in st.session_state:
+            st.session_state[k_sugg] = ""
+        if k_stat not in st.session_state:
+            st.session_state[k_stat] = "idle"
 
-    # Run the full pipeline orchestrator
-    with st.spinner("🧠 Running full content analysis... (first run downloads model)"):
-        res = run_analysis_pipeline(resume_text, jd_text)
+        status = st.session_state[k_stat]
+        badge_map = {
+            "idle":     ("status-idle",     "✏️ Not Generated"),
+            "accepted": ("status-accepted", "✅ Accepted"),
+            "rejected": ("status-rejected", "❌ Rejected"),
+        }
+        badge_cls, badge_label = badge_map.get(status, badge_map["idle"])
+
+        st.markdown(
+            f'<div class="glass-card" style="margin-bottom:1.5rem;">'
+            f'<div style="display:flex;align-items:center;gap:0.6rem;margin-bottom:1rem;">'
+            f'<span style="font-size:1.3rem;">{icon}</span>'
+            f'<h3 style="margin:0;font-size:1.05rem;font-weight:700;color:#E2E8F0;">'
+            f'{display}</h3>'
+            f'<span class="status-badge {badge_cls}">{badge_label}</span>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+        # Two-column diff layout
+        col_orig_ed, col_ai_ed = st.columns(2, gap="large")
+
+        with col_orig_ed:
+            st.markdown('<div class="diff-label diff-label-orig">📄 Current</div>',
+                        unsafe_allow_html=True)
+            edited_val = st.text_area(
+                f"cur_{sec}",
+                value=st.session_state[k_text],
+                height=185,
+                key=f"textarea_cur_{sec}",
+                label_visibility="collapsed",
+                placeholder=f"Your current {display} section...",
+            )
+            st.session_state[k_text] = edited_val
+
+        with col_ai_ed:
+            st.markdown('<div class="diff-label diff-label-sugg">⚡ AI Suggestion</div>',
+                        unsafe_allow_html=True)
+            sugg_val = st.text_area(
+                f"sugg_{sec}",
+                value=st.session_state[k_sugg],
+                height=185,
+                key=f"textarea_sugg_{sec}",
+                label_visibility="collapsed",
+                placeholder="Click an action below to generate an AI suggestion...",
+            )
+            st.session_state[k_sugg] = sugg_val
+
+        # Accept / Reject / Reset row
+        has_sugg = bool(st.session_state[k_sugg].strip())
+        ab1, ab2, ab3, ab_space = st.columns([1.2, 1.2, 1, 4])
+        with ab1:
+            if st.button("✅ Accept", key=f"acc_{sec}", disabled=(not has_sugg)):
+                st.session_state[k_text] = st.session_state[k_sugg]
+                st.session_state[k_sugg] = ""
+                st.session_state[k_stat] = "accepted"
+                st.rerun()
+        with ab2:
+            if st.button("❌ Reject", key=f"rej_{sec}", disabled=(not has_sugg)):
+                st.session_state[k_sugg] = ""
+                st.session_state[k_stat] = "rejected"
+                st.rerun()
+        with ab3:
+            if st.button("🔄 Reset", key=f"rst_{sec}"):
+                orig_txt = st.session_state.get("editor_section_texts", {}).get(sec, "")
+                st.session_state[k_text] = orig_txt
+                st.session_state[k_sugg] = ""
+                st.session_state[k_stat] = "idle"
+                st.rerun()
+
+        # AI toolbar
+        st.markdown(
+            '<div style="margin-top:0.75rem;font-size:0.73rem;color:#475569;margin-bottom:0.3rem;">'
+            '🤖 Ask AI to rewrite this section:</div>',
+            unsafe_allow_html=True,
+        )
+        tact_cols = st.columns(len(ACTION_LABELS))
+        for t_idx, (act_key, act_label) in enumerate(ACTION_LABELS.items()):
+            with tact_cols[t_idx]:
+                if st.button(act_label, key=f"act_{sec}_{act_key}"):
+                    cur_val = st.session_state.get(k_text, "").strip()
+                    if not cur_val:
+                        st.warning(f"The {display} section is empty — add some text first.")
+                    elif not _gemini_key:
+                        st.error("🔑 Please enter your Gemini API key in the sidebar.")
+                    else:
+                        with st.spinner(f"⚡ Generating {act_label} for {display}..."):
+                            ok_ai, res_ai = generate_section_suggestion(
+                                section_name=sec,
+                                current_text=cur_val,
+                                jd_text=_jd_text_ed,
+                                missing_skills=_missing_skills_ed,
+                                action=act_key,
+                                api_key=_gemini_key,
+                            )
+                        if ok_ai:
+                            st.session_state[k_sugg] = res_ai
+                            st.session_state[k_stat] = "idle"
+                            st.rerun()
+                        else:
+                            st.error(res_ai)
+
+        st.markdown("</div>", unsafe_allow_html=True)  # close glass-card
+
+    # ── Download Panel ────────────────────────────────────────────────────────
+    st.markdown("<hr class='custom-divider'>", unsafe_allow_html=True)
+    st.markdown("""
+    <div class="download-panel">
+        <h3>📥 Download Your Improved Resume</h3>
+        <p>Your accepted edits are compiled into a clean, professional document ready to send.</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    final_resume_json = {
+        sec: st.session_state.get(f"edit_text_{sec}", "")
+        for sec in EDITABLE_SECTIONS
+    }
+    final_name = (st.session_state.get("editor_candidate_name") or "Resume").strip()
+
+    accepted_count = sum(
+        1 for sec in EDITABLE_SECTIONS
+        if st.session_state.get(f"edit_stat_{sec}") == "accepted"
+    )
+    st.markdown(
+        f'<div style="text-align:center;font-size:0.82rem;color:#64748B;margin-bottom:1.2rem;">'
+        f'{accepted_count} section(s) updated with AI suggestions</div>',
+        unsafe_allow_html=True,
+    )
+
+    dl_col_a, dl_col_b, dl_col_c = st.columns([1, 1, 2])
+    with dl_col_a:
+        ok_docx, docx_bytes, _ = export_resume(final_resume_json, final_name, fmt="docx")
+        if ok_docx and docx_bytes:
+            st.download_button(
+                label="📄 Download DOCX",
+                data=docx_bytes,
+                file_name=f"{final_name.replace(' ', '_')}_Resume.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                key="dl_docx_btn",
+            )
+        else:
+            st.error("DOCX export unavailable. Run: pip install python-docx")
+
+    with dl_col_b:
+        ok_pdf, pdf_bytes, pdf_err_msg = export_resume(final_resume_json, final_name, fmt="pdf")
+        if ok_pdf and pdf_bytes:
+            st.download_button(
+                label="📕 Download PDF",
+                data=pdf_bytes,
+                file_name=f"{final_name.replace(' ', '_')}_Resume.pdf",
+                mime="application/pdf",
+                key="dl_pdf_btn",
+            )
+        else:
+            st.info("💡 PDF: Install Microsoft Word + docx2pdf, or reportlab.")
+
+    st.markdown("""
+    <div style="text-align:center;margin-top:1.2rem;font-size:0.76rem;color:#334155;">
+        ✏️ Edits are session-only — download before closing the tab.
+    </div>
+    """, unsafe_allow_html=True)
+    st.stop()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Upload Section & Analysis Routing
+# ─────────────────────────────────────────────────────────────────────────────
+if st.session_state.get("analysis_results") is None:
+    col_r, col_j = st.columns(2, gap="large")
+
+    with col_r:
+        st.markdown("""
+        <div class="glass-card">
+            <h3>📄 Your Resume</h3>
+            <p>Upload your resume PDF for deep analysis</p>
+        </div>""", unsafe_allow_html=True)
+        resume_file = st.file_uploader("Resume", type=["pdf"], key="resume_up",
+                                       label_visibility="collapsed")
+        if resume_file:
+            st.markdown(f"""
+            <div style="margin-top:0.75rem;padding:0.6rem 1rem;
+                background:rgba(52,211,153,0.1);border:1px solid rgba(52,211,153,0.3);
+                border-radius:10px;font-size:0.83rem;color:#6EE7B7;">
+                ✅ &nbsp;<strong>{resume_file.name}</strong> ({resume_file.size/1024:.1f} KB)
+            </div>""", unsafe_allow_html=True)
+
+    with col_j:
+        st.markdown("""
+        <div class="glass-card">
+            <h3>💼 Job Description</h3>
+            <p>Upload the job description PDF you're targeting</p>
+        </div>""", unsafe_allow_html=True)
+        jd_file = st.file_uploader("JD", type=["pdf"], key="jd_up",
+                                    label_visibility="collapsed")
+        if jd_file:
+            st.markdown(f"""
+            <div style="margin-top:0.75rem;padding:0.6rem 1rem;
+                background:rgba(96,165,250,0.1);border:1px solid rgba(96,165,250,0.3);
+                border-radius:10px;font-size:0.83rem;color:#93C5FD;">
+                ✅ &nbsp;<strong>{jd_file.name}</strong> ({jd_file.size/1024:.1f} KB)
+            </div>""", unsafe_allow_html=True)
+
+    st.markdown("<br>", unsafe_allow_html=True)
+    _, btn_col, _ = st.columns([1, 2, 1])
+    with btn_col:
+        analyze_clicked = st.button("🚀  Analyze My Resume",
+                                     disabled=(resume_file is None or jd_file is None))
+
+    if not resume_file or not jd_file:
+        st.markdown("""
+        <div style="text-align:center;margin-top:1rem;color:#475569;font-size:0.85rem;">
+            ⬆️  Please upload both PDFs to enable analysis
+        </div>""", unsafe_allow_html=True)
+
+    if analyze_clicked and resume_file and jd_file:
+        st.markdown("<hr class='custom-divider'>", unsafe_allow_html=True)
+
+        with st.spinner("📄 Extracting text from PDFs..."):
+            resume_text = extract_text_from_pdf(resume_file)
+            jd_text     = extract_text_from_pdf(jd_file)
+
+        if not resume_text.strip():
+            st.error("❌ Could not extract text from the Resume PDF. "
+                     "Please ensure it contains selectable (non-scanned) text.")
+            st.stop()
+        if not jd_text.strip():
+            st.error("❌ Could not extract text from the Job Description PDF.")
+            st.stop()
+
+        with st.spinner("🧠 Running full content analysis... (first run downloads model)"):
+            res = run_analysis_pipeline(resume_text, jd_text)
+
+        st.session_state["analysis_results"] = res
+        st.session_state["analysis_resume_text"] = resume_text
+        st.session_state["analysis_jd_text"] = jd_text
+        st.session_state["analysis_resume_name"] = resume_file.name
+        st.session_state["analysis_jd_name"] = jd_file.name
+        st.session_state["analysis_section_texts"] = res.get("section_texts", {})
+        st.rerun()
+    st.stop()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Analysis Results Dashboard
+# ─────────────────────────────────────────────────────────────────────────────
+if st.session_state.get("analysis_results") is not None:
+    res = st.session_state["analysis_results"]
+    resume_text = st.session_state["analysis_resume_text"]
+    jd_text = st.session_state["analysis_jd_text"]
+    resume_filename = st.session_state["analysis_resume_name"]
+    jd_filename = st.session_state["analysis_jd_name"]
+    section_texts = st.session_state["analysis_section_texts"]
+
+    # Display the custom summary banner at the top
+    ban_col_info, ban_col_btn = st.columns([4, 1.2])
+    with ban_col_info:
+        st.markdown(f"""
+        <div style="padding: 0.5rem 0;">
+            <span style="color: #94A3B8; font-size: 0.85rem;">Currently Analyzing:</span>
+            <span style="color: #6EE7B7; font-size: 0.85rem; font-weight: 600; margin-left: 0.5rem;">📄 {resume_filename}</span>
+            <span style="color: #94A3B8; font-size: 0.85rem; margin: 0 0.5rem;">vs</span>
+            <span style="color: #93C5FD; font-size: 0.85rem; font-weight: 600;">💼 {jd_filename}</span>
+        </div>
+        """, unsafe_allow_html=True)
+    with ban_col_btn:
+        if st.button("🔄 Analyze New Files", key="reset_analysis_btn"):
+            st.session_state["analysis_results"] = None
+            st.session_state["analysis_resume_name"] = None
+            st.session_state["analysis_jd_name"] = None
+            st.rerun()
+
+    st.markdown("<hr class='custom-divider'>", unsafe_allow_html=True)
+
 
     # Extract structured results for the UI
     match_score          = res["match_score"]
@@ -1303,7 +1668,7 @@ if analyze_clicked and resume_file and jd_file:
         st.markdown('<div class="improve-cta-wrap">', unsafe_allow_html=True)
         if st.button("✨  Improve My Resume", key="open_editor_btn"):
             EDITABLE_SECTIONS_INIT = ["summary", "experience", "projects", "skills", "education"]
-            st.session_state["editor_active"]         = True
+            st.session_state["active_tab"]            = "editor"
             st.session_state["editor_resume_text"]    = resume_text
             st.session_state["editor_jd_text"]        = jd_text
             st.session_state["editor_section_texts"]  = section_texts
@@ -1318,239 +1683,3 @@ if analyze_clicked and resume_file and jd_file:
             st.rerun()
         st.markdown('</div>', unsafe_allow_html=True)
 
-
-# =============================================================================
-# PHASE 2 — AI RESUME EDITOR PAGE
-# =============================================================================
-if st.session_state.get("editor_active"):
-
-    EDITABLE_SECTIONS = ["summary", "experience", "projects", "skills", "education"]
-    SECTION_ICONS_ED = {
-        "summary": "👤", "experience": "💼", "projects": "🚀",
-        "skills": "⚙️",  "education": "🎓",
-    }
-    SECTION_DISPLAY_ED = {
-        "summary": "Professional Summary", "experience": "Work Experience",
-        "projects": "Projects", "skills": "Technical Skills", "education": "Education",
-    }
-    ACTION_LABELS = {
-        "improve":      "✨ Improve",
-        "ats_friendly": "🎯 ATS Friendly",
-        "shorten":      "✂️ Shorten",
-        "expand":       "🔭 Expand",
-        "add_metrics":  "📊 Add Metrics",
-    }
-
-    _jd_text_ed        = st.session_state.get("editor_jd_text", "")
-    _missing_skills_ed = st.session_state.get("editor_missing_skills", [])
-    _gemini_key        = st.session_state.get("gemini_api_key", "")
-
-    # ── Back button + header ──────────────────────────────────────────────────
-    st.markdown("<br>", unsafe_allow_html=True)
-    col_back_ed, _ = st.columns([1, 9])
-    with col_back_ed:
-        if st.button("← Back to Analysis", key="editor_back_btn"):
-            st.session_state["editor_active"] = False
-            st.rerun()
-
-    st.markdown("""
-    <div class="editor-hero">
-        <div class="badge" style="background:linear-gradient(135deg,rgba(16,185,129,0.25),rgba(59,130,246,0.2));
-            border:1px solid rgba(16,185,129,0.4);color:#34D399;">
-            ✨ Phase 2 · AI Resume Editor
-        </div>
-        <h2>Your AI-Powered Resume Editor</h2>
-        <p>Review each section side-by-side. Accept, reject, or manually edit
-        every suggestion. You stay in full control.</p>
-    </div>
-    """, unsafe_allow_html=True)
-
-    _, name_col_ed, _ = st.columns([1, 2, 1])
-    with name_col_ed:
-        cand_name = st.text_input(
-            "Your full name (used in the exported resume header)",
-            value=st.session_state.get("editor_candidate_name", ""),
-            placeholder="e.g. Raghav Pahwa",
-            key="editor_name_input",
-        )
-        st.session_state["editor_candidate_name"] = cand_name
-
-    st.markdown("<hr class='custom-divider'>", unsafe_allow_html=True)
-
-    # ── Section-by-section editor panels ─────────────────────────────────────
-    for sec in EDITABLE_SECTIONS:
-        icon    = SECTION_ICONS_ED.get(sec, "📋")
-        display = SECTION_DISPLAY_ED.get(sec, sec.title())
-        k_text  = f"edit_text_{sec}"
-        k_sugg  = f"edit_sugg_{sec}"
-        k_stat  = f"edit_stat_{sec}"
-
-        if k_text not in st.session_state:
-            st.session_state[k_text] = st.session_state.get(
-                "editor_section_texts", {}).get(sec, "")
-        if k_sugg not in st.session_state:
-            st.session_state[k_sugg] = ""
-        if k_stat not in st.session_state:
-            st.session_state[k_stat] = "idle"
-
-        status = st.session_state[k_stat]
-        badge_map = {
-            "idle":     ("status-idle",     "✏️ Not Generated"),
-            "accepted": ("status-accepted", "✅ Accepted"),
-            "rejected": ("status-rejected", "❌ Rejected"),
-        }
-        badge_cls, badge_label = badge_map.get(status, badge_map["idle"])
-
-        st.markdown(
-            f'<div class="glass-card" style="margin-bottom:1.5rem;">'
-            f'<div style="display:flex;align-items:center;gap:0.6rem;margin-bottom:1rem;">'
-            f'<span style="font-size:1.3rem;">{icon}</span>'
-            f'<h3 style="margin:0;font-size:1.05rem;font-weight:700;color:#E2E8F0;">'
-            f'{display}</h3>'
-            f'<span class="status-badge {badge_cls}">{badge_label}</span>'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
-
-        # Two-column diff layout
-        col_orig_ed, col_ai_ed = st.columns(2, gap="large")
-
-        with col_orig_ed:
-            st.markdown('<div class="diff-label diff-label-orig">📄 Current</div>',
-                        unsafe_allow_html=True)
-            edited_val = st.text_area(
-                f"cur_{sec}",
-                value=st.session_state[k_text],
-                height=185,
-                key=f"textarea_cur_{sec}",
-                label_visibility="collapsed",
-                placeholder=f"Your current {display} section...",
-            )
-            st.session_state[k_text] = edited_val
-
-        with col_ai_ed:
-            st.markdown('<div class="diff-label diff-label-sugg">⚡ AI Suggestion</div>',
-                        unsafe_allow_html=True)
-            sugg_val = st.text_area(
-                f"sugg_{sec}",
-                value=st.session_state[k_sugg],
-                height=185,
-                key=f"textarea_sugg_{sec}",
-                label_visibility="collapsed",
-                placeholder="Click an action below to generate an AI suggestion...",
-            )
-            st.session_state[k_sugg] = sugg_val
-
-        # Accept / Reject / Reset row
-        has_sugg = bool(st.session_state[k_sugg].strip())
-        ab1, ab2, ab3, ab_space = st.columns([1.2, 1.2, 1, 4])
-        with ab1:
-            if st.button("✅ Accept", key=f"acc_{sec}", disabled=(not has_sugg)):
-                st.session_state[k_text] = st.session_state[k_sugg]
-                st.session_state[k_sugg] = ""
-                st.session_state[k_stat] = "accepted"
-                st.rerun()
-        with ab2:
-            if st.button("❌ Reject", key=f"rej_{sec}", disabled=(not has_sugg)):
-                st.session_state[k_sugg] = ""
-                st.session_state[k_stat] = "rejected"
-                st.rerun()
-        with ab3:
-            if st.button("🔄 Reset", key=f"rst_{sec}"):
-                orig_txt = st.session_state.get("editor_section_texts", {}).get(sec, "")
-                st.session_state[k_text] = orig_txt
-                st.session_state[k_sugg] = ""
-                st.session_state[k_stat] = "idle"
-                st.rerun()
-
-        # AI toolbar
-        st.markdown(
-            '<div style="margin-top:0.75rem;font-size:0.73rem;color:#475569;margin-bottom:0.3rem;">'
-            '🤖 Ask AI to rewrite this section:</div>',
-            unsafe_allow_html=True,
-        )
-        tact_cols = st.columns(len(ACTION_LABELS))
-        for t_idx, (act_key, act_label) in enumerate(ACTION_LABELS.items()):
-            with tact_cols[t_idx]:
-                if st.button(act_label, key=f"act_{sec}_{act_key}"):
-                    cur_val = st.session_state.get(k_text, "").strip()
-                    if not cur_val:
-                        st.warning(f"The {display} section is empty — add some text first.")
-                    elif not _gemini_key:
-                        st.error("🔑 Please enter your Gemini API key in the sidebar.")
-                    else:
-                        with st.spinner(f"⚡ Generating {act_label} for {display}..."):
-                            ok_ai, res_ai = generate_section_suggestion(
-                                section_name=sec,
-                                current_text=cur_val,
-                                jd_text=_jd_text_ed,
-                                missing_skills=_missing_skills_ed,
-                                action=act_key,
-                                api_key=_gemini_key,
-                            )
-                        if ok_ai:
-                            st.session_state[k_sugg] = res_ai
-                            st.session_state[k_stat] = "idle"
-                            st.rerun()
-                        else:
-                            st.error(res_ai)
-
-        st.markdown("</div>", unsafe_allow_html=True)  # close glass-card
-
-    # ── Download Panel ────────────────────────────────────────────────────────
-    st.markdown("<hr class='custom-divider'>", unsafe_allow_html=True)
-    st.markdown("""
-    <div class="download-panel">
-        <h3>📥 Download Your Improved Resume</h3>
-        <p>Your accepted edits are compiled into a clean, professional document ready to send.</p>
-    </div>
-    """, unsafe_allow_html=True)
-
-    final_resume_json = {
-        sec: st.session_state.get(f"edit_text_{sec}", "")
-        for sec in EDITABLE_SECTIONS
-    }
-    final_name = (st.session_state.get("editor_candidate_name") or "Resume").strip()
-
-    accepted_count = sum(
-        1 for sec in EDITABLE_SECTIONS
-        if st.session_state.get(f"edit_stat_{sec}") == "accepted"
-    )
-    st.markdown(
-        f'<div style="text-align:center;font-size:0.82rem;color:#64748B;margin-bottom:1.2rem;">'
-        f'{accepted_count} section(s) updated with AI suggestions</div>',
-        unsafe_allow_html=True,
-    )
-
-    dl_col_a, dl_col_b, dl_col_c = st.columns([1, 1, 2])
-    with dl_col_a:
-        ok_docx, docx_bytes, _ = export_resume(final_resume_json, final_name, fmt="docx")
-        if ok_docx and docx_bytes:
-            st.download_button(
-                label="📄 Download DOCX",
-                data=docx_bytes,
-                file_name=f"{final_name.replace(' ', '_')}_Resume.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                key="dl_docx_btn",
-            )
-        else:
-            st.error("DOCX export unavailable. Run: pip install python-docx")
-
-    with dl_col_b:
-        ok_pdf, pdf_bytes, pdf_err_msg = export_resume(final_resume_json, final_name, fmt="pdf")
-        if ok_pdf and pdf_bytes:
-            st.download_button(
-                label="📕 Download PDF",
-                data=pdf_bytes,
-                file_name=f"{final_name.replace(' ', '_')}_Resume.pdf",
-                mime="application/pdf",
-                key="dl_pdf_btn",
-            )
-        else:
-            st.info("💡 PDF: Install Microsoft Word + docx2pdf, or reportlab.")
-
-    st.markdown("""
-    <div style="text-align:center;margin-top:1.2rem;font-size:0.76rem;color:#334155;">
-        ✏️ Edits are session-only — download before closing the tab.
-    </div>
-    """, unsafe_allow_html=True)
